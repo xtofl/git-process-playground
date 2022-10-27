@@ -125,7 +125,15 @@ class Remote:
 
     async def update_view(self):
         check_call(self.clone, git, "fetch")
+        check_call(self.clone, git, "remote", "prune", "origin")
         await self.interact(self)
+
+    async def show_view(self, tool=None):
+        if tool is None:
+            tool = (shutil.which("gitk"), "--all")
+        process = subprocess.Popen(tool, cwd=self.clone)
+        while process.poll():
+            await asyncio.sleep(1)
 
 
 async def git_init(repo: Path, interact):
@@ -138,6 +146,11 @@ async def git_init(repo: Path, interact):
     git_commit(clone, "a first commit")
     git_push(clone)
     return Remote(repo, clone, interact)
+
+
+async def in_sequence(*tasks):
+    for task in tasks:
+        await task
 
 
 async def play(play_dir: Path, repo_name: str, interact):
@@ -158,17 +171,24 @@ async def play(play_dir: Path, repo_name: str, interact):
     tasks = (
         task_on_master(
             dev=bob,
-            feature_name="feature-1",
-            commits=2,
-        ),
-        task_on_master(
-            dev=alice,
-            feature_name="feature-2",
+            feature_name="F1",
             commits=3,
+        ),
+        in_sequence(
+            task_on_master(
+                dev=alice,
+                feature_name="F2",
+                commits=2,
+            ),
+            task_on_master(
+                dev=alice,
+                feature_name="F3",
+                commits=3,
+            ),
         ),
     )
 
-    await gather(*tasks)
+    await gather(remote.show_view(), *tasks)
 
 
 @click.command("run")
