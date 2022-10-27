@@ -12,16 +12,17 @@ from typing import Callable, Awaitable
 import click as click
 
 
-async def sleep_quanta(quanta):
-    await asyncio.sleep(0.1 * quanta)
+async def sleep_quanta(quantum_seconds, quanta):
+    await asyncio.sleep(quantum_seconds * quanta)
 
 
 class Dev:
-    def __init__(self, name):
+    def __init__(self, name, time_passes: Callable[[float], Awaitable[None]]):
         self.name = name
+        self.time_passes: Callable[[float], Awaitable[None]] = time_passes
 
     async def some_work_async(self, dev_repo, feature_name):
-        await sleep_quanta(len(self.name))
+        await self.time_passes(len(self.name))
 
 
 git = shutil.which("git")
@@ -40,8 +41,7 @@ def git_commit(cwd, message):
     check_call(cwd, git, "commit", "-m", message)
 
 
-async def git_merge(cwd, branch, dest, message):
-    await sleep_quanta(len(branch))
+def git_merge(cwd, branch, dest, message):
     check_call(cwd, git, "checkout", dest)
     check_call(cwd, git, "pull")
     check_call(cwd, git, "merge", "-m", message, "--no-ff", branch)
@@ -72,14 +72,14 @@ async def task_for(
         dev, feature_name, play_dir, repo, source_branch
     )
     for c in range(commits):
-        await some_work_async(dev, dev_repo, feature_name)
+        await dev.some_work_async(dev_repo, feature_name)
         git_add_file(
             cwd=dev_repo, name=f"{feature_name}.{c}.txt", content=f"{dev.name} was here"
         )
         git_commit(cwd=dev_repo, message=f"{feature_name} {c}/{commits}")
         git_push(dev_repo)
         await update_view()
-    await git_merge(dev_repo, branch, destination_branch, f"add {feature_name}")
+    git_merge(dev_repo, branch, destination_branch, f"add {feature_name}")
     git_push(dev_repo)
     check_call(dev_repo, git, "push", "origin", f":{branch}")
     await update_view()
@@ -109,15 +109,15 @@ def git_add_file(cwd: Path, name: str, content: str):
 
 async def default_interact(remote: "Remote"):
     print(f"pausing; update {remote.clone}")
-    check_call(remote.clone, git, "fetch")
+    remote.fetch()
     await asyncio.sleep(0)
     input(">>>>>>>> press enter to continue")
 
 
-async def default_no_interact(remote: "Remote", delay=1.0):
+async def default_no_interact(remote: "Remote", time_passes):
     print(f"pausing; update {remote.clone}")
-    check_call(remote.clone, git, "fetch")
-    await sleep_quanta(delay)
+    remote.fetch()
+    await time_passes(1)
 
 
 class Remote:
@@ -126,8 +126,11 @@ class Remote:
         self.clone = clone
         self.interact = interact
 
-    async def update_view(self):
+    def fetch(self):
         check_call(self.clone, git, "fetch")
+
+    async def update_view(self):
+        self.fetch()
         check_call(self.clone, git, "remote", "prune", "origin")
         await self.interact(self)
 
@@ -144,10 +147,11 @@ async def git_init(repo: Path, interact):
     check_call(".", git, "init", "--bare", repo)
 
     clone = repo / "admin"
-    git_clone(Dev("admin"), clone, repo)
+    git_clone(Dev("admin", asyncio.sleep), clone, repo)
     git_add_file(clone, str(clone / "README.md"), "just some text")
     git_commit(clone, "a first commit")
     git_push(clone)
+
     return Remote(repo, clone, interact)
 
 
@@ -156,9 +160,11 @@ async def in_sequence(*tasks):
         await task
 
 
-async def play(play_dir: Path, repo_name: str, interact):
+async def play(play_dir: Path, repo_name: str, interact, time_passes):
 
-    bob, alice, crusty = tuple(map(Dev, ("Bob", "Alice", "Crusty")))
+    bob, alice, crusty = tuple(
+        Dev(name, time_passes) for name in ("Bob", "Alice", "Crusty")
+    )
 
     repo = play_dir / repo_name
     remote = await git_init(repo, interact)
@@ -205,12 +211,23 @@ async def play(play_dir: Path, repo_name: str, interact):
 
 
 @click.command("run")
-def run(play_dir=None, repo=None):
+@click.option("--play-dir", type=Path, default=None)
+@click.option("--step-seconds", type=float, default=1.5)
+@click.option("--repo-name", type=str)
+def run(play_dir: Path, repo_name: str, step_seconds: float):
     if play_dir is None:
         play_dir = Path(tempfile.TemporaryDirectory().name)
-    if repo is None:
-        repo = "repo"
-    asyncio.run(play(play_dir, repo, functools.partial(default_no_interact, delay=1.5)))
+    if repo_name is None:
+        repo_name = "repo"
+    time_passes = functools.partial(sleep_quanta, step_seconds)
+    asyncio.run(
+        play(
+            play_dir,
+            repo_name,
+            functools.partial(default_no_interact, time_passes=time_passes),
+            time_passes=time_passes
+        )
+    )
 
 
 if __name__ == "__main__":
