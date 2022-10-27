@@ -12,13 +12,16 @@ from typing import Callable, Awaitable
 import click as click
 
 
-async def sleep(quanta):
+async def sleep_quanta(quanta):
     await asyncio.sleep(0.1 * quanta)
 
 
 class Dev:
     def __init__(self, name):
         self.name = name
+
+    async def some_work_async(self, dev_repo, feature_name):
+        await sleep_quanta(len(self.name))
 
 
 git = shutil.which("git")
@@ -38,7 +41,7 @@ def git_commit(cwd, message):
 
 
 async def git_merge(cwd, branch, dest, message):
-    await sleep(len(branch))
+    await sleep_quanta(len(branch))
     check_call(cwd, git, "checkout", dest)
     check_call(cwd, git, "pull")
     check_call(cwd, git, "merge", "-m", message, "--no-ff", branch)
@@ -51,8 +54,8 @@ def git_push(cwd):
     check_call(cwd, git, "push")
 
 
-async def some_work_async(dev_repo: Path, feature_name: str):
-    await asyncio.sleep(len(feature_name))
+async def some_work_async(dev: Dev, dev_repo: Path, feature_name: str):
+    await dev.some_work_async(dev_repo, feature_name)
 
 
 async def task_for(
@@ -69,7 +72,7 @@ async def task_for(
         dev, feature_name, play_dir, repo, source_branch
     )
     for c in range(commits):
-        await some_work_async(dev_repo, feature_name)
+        await some_work_async(dev, dev_repo, feature_name)
         git_add_file(
             cwd=dev_repo, name=f"{feature_name}.{c}.txt", content=f"{dev.name} was here"
         )
@@ -114,7 +117,7 @@ async def default_interact(remote: "Remote"):
 async def default_no_interact(remote: "Remote", delay=1.0):
     print(f"pausing; update {remote.clone}")
     check_call(remote.clone, git, "fetch")
-    await asyncio.sleep(delay)
+    await sleep_quanta(delay)
 
 
 class Remote:
@@ -174,6 +177,16 @@ async def play(play_dir: Path, repo_name: str, interact):
             feature_name="F1",
             commits=3,
         ),
+        task_on_master(
+            dev=crusty,
+            feature_name="F4",
+            commits=5,
+        ),
+        task_on_master(
+            dev=crusty,
+            feature_name="F5",
+            commits=3,
+        ),
         in_sequence(
             task_on_master(
                 dev=alice,
@@ -197,7 +210,7 @@ def run(play_dir=None, repo=None):
         play_dir = Path(tempfile.TemporaryDirectory().name)
     if repo is None:
         repo = "repo"
-    asyncio.run(play(play_dir, repo, functools.partial(default_no_interact, delay=0.1)))
+    asyncio.run(play(play_dir, repo, functools.partial(default_no_interact, delay=1.5)))
 
 
 if __name__ == "__main__":
