@@ -67,6 +67,7 @@ async def task_for(
     source_branch: str,
     destination_branch: str,
     update_view: Callable[[], Awaitable[None]],
+    before_merge: Callable,
 ):
     branch, dev_repo = await clone_and_branch_async(
         dev, feature_name, play_dir, repo, source_branch
@@ -79,6 +80,7 @@ async def task_for(
         git_commit(cwd=dev_repo, message=f"{feature_name} {c}/{commits}")
         git_push(dev_repo)
         await update_view()
+    before_merge(origin=repo, repo=dev_repo, source_branch=source_branch, branch=branch)
     git_merge(dev_repo, branch, destination_branch, f"add {feature_name}")
     git_push(dev_repo)
     check_call(dev_repo, git, "push", "origin", f":{branch}")
@@ -160,7 +162,18 @@ async def in_sequence(*tasks):
         await task
 
 
-async def play(play_dir: Path, repo_name: str, interact, time_passes):
+def git_rebase(origin: Path, repo: Path, source_branch: str, branch: str):
+    do_git = functools.partial(check_call, str(repo), git)
+    do_git("fetch")
+    do_git("rebase", f"origin/{source_branch}")
+    do_git("push", "--force-with-lease")
+
+
+def no_rebase(origin: Path, repo: Path, source_branch: str, branch: str):
+    pass
+
+
+async def play(play_dir: Path, repo_name: str, interact, time_passes, rebase):
 
     bob, alice, crusty = tuple(
         Dev(name, time_passes) for name in ("Bob", "Alice", "Crusty")
@@ -176,6 +189,7 @@ async def play(play_dir: Path, repo_name: str, interact, time_passes):
         source_branch="master",
         destination_branch="master",
         update_view=remote.update_view,
+        before_merge=rebase,
     )
     tasks = (
         task_on_master(
@@ -212,9 +226,10 @@ async def play(play_dir: Path, repo_name: str, interact, time_passes):
 
 @click.command("run")
 @click.option("--play-dir", type=Path, default=None)
-@click.option("--step-seconds", type=float, default=1.5)
+@click.option("--step-seconds", type=float, default=0.5)
 @click.option("--repo-name", type=str)
-def run(play_dir: Path, repo_name: str, step_seconds: float):
+@click.option("--rebase/--no-rebase", type=bool, default=True)
+def run(play_dir: Path, repo_name: str, step_seconds: float, rebase: bool):
     if play_dir is None:
         play_dir = Path(tempfile.TemporaryDirectory().name)
     if repo_name is None:
@@ -225,7 +240,8 @@ def run(play_dir: Path, repo_name: str, step_seconds: float):
             play_dir,
             repo_name,
             functools.partial(default_no_interact, time_passes=time_passes),
-            time_passes=time_passes
+            time_passes=time_passes,
+            rebase=git_rebase if rebase else no_rebase,
         )
     )
 
